@@ -1,0 +1,93 @@
+Backend folder /home/trainig/Documents/project8/bcakend is empty and ready. Here's the plan:
+
+File Structure
+
+bcakend/
+├── venv/                          # Python virtual environment
+├── requirements.txt               # Pinned deps: fastapi, uvicorn[standard], sqlalchemy, alembic, pandas
+├── .env                           # DATABASE_URL, secrets (gitignored)
+├── alembic.ini                    # Alembic config
+├── main.py                        # FastAPI app factory, CORS, router mounting, WS manager wiring
+└── app/
+    ├── __init__.py
+    ├── config.py                  # Settings from .env (DB URL, thresholds, blacklist path)
+    ├── database/
+    │   ├── __init__.py
+    │   ├── connection.py          # SQLAlchemy Core engine + session factory
+    │   ├── metadata.py            # Declarative Base /MetaData shared by models & Alembic
+    │   └── tables.py              # logs, threat_alerts table definitions (Step 5)
+    ├── models/
+    │   └── __init__.py
+    ├── schemas/
+    │   ├── __init__.py
+    │   ├── log.py                 # Pydantic: LogIngest, LogOut
+    │   ├── threat.py              # Pydantic: ThreatOut, ThreatStats
+    │   └── analytics.py           # Pydantic: TimelinePoint
+    ├── parsers/
+    │   ├── __init__.py
+    │   ├── log_parser.py          # Dispatcher: detect format → route to parser
+    │   ├── pfsense_parser.py      # PF Sense firewall log format
+    │   ├── auth_log_parser.py     # System auth logs (failed SSH/sudo logins)
+    │   ├── network_parser.py      # Network traffic logs
+    │   └── simulated_parser.py    # Custom simulated format for demo/testing
+    ├── services/
+    │   ├── __init__.py
+    │   ├── log_service.py         # Store parsed logs in DB (insert via Core)
+    │   ├── threat_service.py      # Persist threat alerts, query/filter threats
+    │   └── stats_service.py       # Aggregations for stats/timeline endpoints
+    ├── detection/
+    │   ├── __init__.py
+    │   ├── threat_detector.py     # Rule engine (Steps 7–8): auth/network/firewall rules
+    │   ├── scoring.py             # Weights (+50/+30/+40/+20), severity bands 0-100
+    │   ├── anomaly_detector.py    # Sliding window, rolling mean/std, 3σ flagging (Step 9)
+    │   └── blacklist.py           # Blacklisted IP list loader (file/db backed)
+    ├── websocket/
+    │   ├── __init__.py
+    │   └── manager.py             # ConnectionManager: broadcast new_log / threat_alert
+    └── api/
+        ├── __init__.py
+        ├── router.py              # Mounts all sub-routers under prefixes
+        ├── ws.py                  # GET /ws/logs WebSocket endpoint (Step 4)
+        ├── ingest.py              # POST /api/ingest/log, /api/ingest/pfsense (Steps 4, 12)
+        ├── logs.py                # GET /api/logs/recent
+        ├── threats.py             # GET /api/threats, /api/threats/stats (Step 11)
+        ├── analytics.py           # GET /api/analytics/timeline (Step 11)
+        └── pfsense.py             # GET /api/pfsense/firewall-rules (Step 12)
+
+Build Plan (in order)
+
+Phase 1 — Foundation (Steps 2, 5, 6)
+
+1. python -m venv venv → activate → pip install fastapi "uvicorn[standard]" sqlalchemy alembic pandas → pip freeze > requirements.txt
+
+2. config.py reads DATABASE_URL from .env (PostgreSQL)
+
+3. database/connection.py: engine + sessionmaker; tables.py: two tables:
+
+- logs: id PK, timestamp, source_ip, destination_ip, event_type, severity, raw_message, parsed_data JSONB, created_at
+
+- threat_alerts: id PK, log_id FK→logs.id, threat_type, threat_score, description, is_resolved, created_at
+
+4. alembic init, point env.py at your MetaData → generate initial migration
+
+Phase 2 — Parsing (Step 3)
+
+5. Each parser returns a normalized dict: timestamp, src/dst IP, event_type, severity; log_parser.py auto-detects format
+
+Phase 3 — Real-time pipeline (Steps 4, 10)
+
+6. websocket/manager.py: track connections, broadcast(event_type, payload)
+
+7. Pipeline flow: WS/HTTP ingest → parser → DB insert → detector → score → alert stored → broadcast new_log + threat_alert
+
+Phase 4 — Detection (Steps 7–9)
+
+8. Rules: ≥5 failed logins/IP/min (+30), blacklisted IP (+50), port scan pattern (+40), repeated firewall blocks/IP (+20); sum capped 0–100 → Low/Medium/High/Critical bands
+
+9. Anomaly: per-IP deque sliding window of timestamps → rolling mean ± 3σ on connection frequency
+
+Phase 5 — REST routes (Steps 11–12)
+
+10. Wire up the 6 endpoints listed above with Pydantic response models and severity/date filters
+
+Run command: uvicorn main:app --reload --port 8000
